@@ -1,6 +1,8 @@
+﻿import argparse
 import json
 import re
-from datetime import datetime
+import time
+from datetime import datetime, timedelta
 from urllib.parse import urljoin
 
 import requests
@@ -8,6 +10,7 @@ from bs4 import BeautifulSoup
 
 BASE_URL = "https://kemu.edu.pk"
 START_URL = "https://kemu.edu.pk/datesheets/"
+OUTPUT_FILE = "kemu_datesheets.json"
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0"
@@ -62,35 +65,27 @@ def extract_pdf(page):
 
 
 def scrape():
-
     soup = get_soup(START_URL)
 
     results = []
-
     seen = set()
-
     current_program = ""
 
     # Read headings and links in page order
     for tag in soup.find_all(["h2", "h3", "h4", "a"]):
-
-        # Program headings
         if tag.name in ["h2", "h3", "h4"]:
             current_program = tag.get_text(" ", strip=True)
             continue
 
         href = tag.get("href")
-
         if not href:
             continue
 
         href = urljoin(BASE_URL, href)
 
-        # Keep only date sheet pages
         if "/datesheets/" not in href:
             continue
 
-        # Skip index page
         if href.rstrip("/") == START_URL.rstrip("/"):
             continue
 
@@ -98,10 +93,8 @@ def scrape():
             continue
 
         seen.add(href)
-
         title = tag.get_text(" ", strip=True)
 
-        # Ignore empty links
         if len(title) < 5:
             continue
 
@@ -109,9 +102,7 @@ def scrape():
 
         try:
             page = get_soup(href)
-
             published_date = extract_date(page)
-
             pdf_url = extract_pdf(page)
 
             results.append({
@@ -130,14 +121,47 @@ def scrape():
     return results
 
 
-if __name__ == "__main__":
+def save_results(results, output_file=OUTPUT_FILE):
+    with open(output_file, "w", encoding="utf-8") as f:
+        json.dump(results, f, ensure_ascii=False, indent=4)
 
+
+def run_scrape(output_file=OUTPUT_FILE):
     data = scrape()
-
-    with open("kemu_datesheets.json", "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=4)
-
+    save_results(data, output_file)
     print()
     print("=" * 40)
     print(f"Saved {len(data)} date sheets")
     print("=" * 40)
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(description="Schedule KEMU date sheet scraper")
+    parser.add_argument("--interval", type=int, default=2,
+                        help="Run every N minutes. Defaults to 2 minutes.")
+    parser.add_argument("--output", type=str, default=OUTPUT_FILE,
+                        help="Output JSON file path.")
+    return parser.parse_args()
+
+
+if __name__ == "__main__":
+    args = parse_args()
+
+    if args.interval <= 0:
+        run_scrape(args.output)
+    else:
+        interval_seconds = args.interval * 60
+        print(f"Starting scheduled scraper every {args.interval} minute(s). Press Ctrl+C to stop.")
+        next_run = datetime.utcnow()
+
+        try:
+            while True:
+                now = datetime.utcnow()
+                if now >= next_run:
+                    print(f"\n[{now.isoformat()}] Running scraper...")
+                    run_scrape(args.output)
+                    next_run = now + timedelta(seconds=interval_seconds)
+                sleep_seconds = max(0, (next_run - datetime.utcnow()).total_seconds())
+                time.sleep(min(sleep_seconds, 10))
+        except KeyboardInterrupt:
+            print("\nScheduler stopped by user.")
